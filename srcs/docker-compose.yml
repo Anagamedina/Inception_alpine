@@ -1,0 +1,218 @@
+services:
+  mariadb:
+    image: mariadb:inception
+    build:
+      context: .
+      dockerfile: requirements/mariadb/Dockerfile
+    container_name: mariadb
+    env_file:
+      - .env
+    networks:
+      - inception_network
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    secrets:
+      - db_password
+      - db_root_password
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: always
+
+  wordpress:
+    image: wordpress:inception
+    build:
+      context: .
+      dockerfile: requirements/wordpress/Dockerfile
+    container_name: wordpress
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    env_file:
+      - .env
+    networks:
+      - inception_network
+    volumes:
+      - wordpress_data:/var/www/html/wordpress
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    secrets:
+      - db_password
+      - wp_admin_password
+      - wp_user_password
+    restart: always
+
+  nginx:
+    image: nginx:inception
+    build:
+      context: . 
+      dockerfile: requirements/nginx/Dockerfile
+    container_name: nginx
+    environment:
+      - DOMAIN_NAME=${WP_URL}
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    ports:
+      - "${NGINX_PORT}:443"
+    networks:
+      - inception_network
+    volumes:
+      - wordpress_data:/var/www/html/wordpress
+    restart: always
+
+  redis:
+    image: redis:inception
+    build:
+      context: .
+      dockerfile: requirements/bonus/redis/Dockerfile
+    container_name: redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - inception_network
+    restart: always
+
+  ftp: 
+    image: ftp:inception
+    build:
+      context: . 
+      dockerfile: requirements/bonus/ftp/Dockerfile
+    container_name: ftp
+    ports:
+      - "2121:21"
+      - "21100-21110:21100-21110"   # Rango de puertos para transferencia de datos (Modo Pasivo)
+    env_file:
+      - .env
+    environment:
+      - FTP_USER=${WP_USER}
+    volumes:
+      - wordpress_data:/var/www/html/wordpress
+    networks:
+      - inception_network
+    secrets:
+      - wp_user_password
+      - ftp_password
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    restart: always
+
+  adminer:
+    image: adminer:inception
+    build:
+      context: .
+      dockerfile: requirements/bonus/adminer/Dockerfile
+    container_name: adminer
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - inception_network
+    restart: always
+
+  netdata:
+    image: netdata:inception
+    build:
+      context: .
+      dockerfile: requirements/bonus/netdata/Dockerfile
+    container_name: netdata
+    hostname: netdata
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor=unconfined
+    networks:
+      - inception_network
+    volumes:
+      - netdata_config:/etc/netdata
+      - netdata_lib:/var/lib/netdata
+      - netdata_cache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: always
+
+  static_site:
+    image: static_site:inception
+    build:
+      context: .
+      dockerfile: requirements/bonus/static_site/Dockerfile
+    container_name: static_site
+    networks:
+      - inception_network
+    restart: always
+
+networks:
+  inception_network:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/mariadb
+  wordpress_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/wordpress
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/redis
+  static_site_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/static
+  netdata_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/netdata/config
+  netdata_lib:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/netdata/lib
+  netdata_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${USER}/data/netdata/cache
+
+
+secrets:
+  db_password:
+    file: secrets/db_password.txt
+  db_root_password:
+    file: secrets/db_root_password.txt
+  wp_admin_password:
+    file: secrets/wp_admin_password.txt
+  wp_user_password:
+    file: secrets/wp_user_password.txt
+  ftp_password:
+    file: secrets/ftp_password.txt
